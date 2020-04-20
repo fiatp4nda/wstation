@@ -11,7 +11,10 @@
 #include <Adafruit_BME680.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
+#include "SSD1306.h"
 
+SSD1306  display(0x3C, D2, D1);
+String disp;
 #define MQTT_TOPIC_HUMIDITY "ext/bme680/humidity"
 #define MQTT_TOPIC_PRESSURE "ext/bme680/pressure"
 #define MQTT_TOPIC_TEMPERATURE "ext/bme680/temperature"
@@ -41,6 +44,10 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
 void setup() {
+
+  display.init();
+  display.flipScreenVertically();
+
   Serial.begin(115200);
   while (! Serial);
 
@@ -63,6 +70,8 @@ void setup() {
   bme.setGasHeater(320, 150); // 320*C for 150 ms
   setupWifi();
   mqttClient.setServer(MQTT_SERVER, 1883);
+
+  //display.setTextAlignment(TEXT_ALIGN_CENTER);
 }
 
 void loop() {
@@ -93,7 +102,11 @@ void loop() {
     mqttPublish(MQTT_TOPIC_HUMIDITY, humidity);
     mqttPublish(MQTT_TOPIC_VOC, voc);
 
-
+    disp = String("TEMP  " + (String)temperature + " °C \n" + "RH     " + (String)humidity + "% \n" + "PRES  " + (String)pressure + " Pa \n" + "VOC   " + (String)voc + " Ω \n");
+    //sprintf(disp, "TEMP %f", temperature);
+    display.resetDisplay();
+    display.drawString(0, 0, disp);
+    display.display();
   }
 }
 
@@ -110,6 +123,11 @@ void setupWifi() {
 
   Serial.println();
   Serial.println("WiFi connected");
+
+  display.resetDisplay();
+  disp = String("Connected to " + (String)WIFI_SSID);
+  display.drawString(0, 0, disp);
+
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 }
@@ -118,9 +136,14 @@ void mqttReconnect() {
   while (!mqttClient.connected()) {
     Serial.print("Attempting MQTT connection...");
 
+    disp = String("\n Attempting MQTT connection...");
+    display.drawString(0, 0, disp);
     // Attempt to connect
     if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD, MQTT_TOPIC_STATE, 1, true, "disconnected", false)) {
       Serial.println("connected");
+
+      disp = String("\n \n Connected to " + (String)MQTT_SERVER);
+      display.drawString(0, 0, disp);
 
       // Once connected, publish an announcement...
       mqttClient.publish(MQTT_TOPIC_STATE, "connected", true);
