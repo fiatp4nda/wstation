@@ -9,22 +9,44 @@
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
+#include <Adafruit_BME280.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include "SSD1306.h"
+#include <WiFiUdp.h>
+#include <EasyNTPClient.h>
+#include <Time.h>
+#include "SD.h"
+
+const int chipSelect = D8;
+
+WiFiUDP udp;
+EasyNTPClient ntpClient(udp, "pool.ntp.org", 0); // IST = GMT + 5:30
+
+time_t ts;
+long start_ts;
+
+String str;
+String fstr;
 
 SSD1306  display(0x3C, D2, D1);
 String disp;
+
 #define MQTT_TOPIC_HUMIDITY "ext/bme680/humidity"
 #define MQTT_TOPIC_PRESSURE "ext/bme680/pressure"
 #define MQTT_TOPIC_TEMPERATURE "ext/bme680/temperature"
 #define MQTT_TOPIC_VOC "ext/bme680/airquality"
+
+#define MQTT_TOPIC_HUMIDITY2 "ext/bme280/humidity"
+#define MQTT_TOPIC_PRESSURE2 "ext/bme280/pressure"
+#define MQTT_TOPIC_TEMPERATURE2 "ext/bme280/temperature"
 
 #define MQTT_TOPIC_STATE "ext/bme680/status"
 #define MQTT_PUBLISH_DELAY 10000
 #define MQTT_CLIENT_ID "esp8266bme680"
 
 #define BME680_ADDRESS 0x77
+#define BME280_ADDRESS 0x76
 
 const char *WIFI_SSID = "Vodafone-34709121";
 const char *WIFI_PASSWORD = "3yx3mzehfa8t9s3";
@@ -37,24 +59,40 @@ float humidity;
 float pressure;
 float temperature;
 float voc;
+
+float humidity2;
+float pressure2;
+float temperature2;
+
+
 long lastMsgTime = 0;
 
 Adafruit_BME680 bme;
+
+Adafruit_BME280 bme2;
+
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
 void setup() {
 
   display.init();
-  display.flipScreenVertically();
+  //display.flipScreenVertically();
 
   Serial.begin(115200);
   while (! Serial);
 
   if (!bme.begin(BME680_ADDRESS)) {
+    Serial.println("Could not find a valid BME680 sensor, check wiring or BME-680 address!");
+    while (1);
+  }
+
+  if (!bme2.begin(BME280_ADDRESS)) {
     Serial.println("Could not find a valid BME280 sensor, check wiring or BME-280 address!");
     while (1);
   }
+
+  ts = ntpClient.getUnixTime();
 
   // Use force mode so that the sensor returns to sleep mode when the measurement is finished
   /*bme.setSampling(Adafruit_BME680::MODE_FORCED,
@@ -63,15 +101,36 @@ void setup() {
                     Adafruit_BME680::SAMPLING_X1, // humidity
                     Adafruit_BME680::FILTER_OFF   );
   */
-  bme.setTemperatureOversampling(BME680_OS_8X);
+
+  bme.setTemperatureOversampling(BME680_OS_16X);
   bme.setHumidityOversampling(BME680_OS_2X);
   bme.setPressureOversampling(BME680_OS_4X);
   bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
   bme.setGasHeater(320, 150); // 320*C for 150 ms
+
+  bme2.setSampling(Adafruit_BME280::MODE_FORCED,
+                    Adafruit_BME280::SAMPLING_X1, // temperature
+                    Adafruit_BME280::SAMPLING_X1, // pressure
+                    Adafruit_BME280::SAMPLING_X1, // humidity
+                    Adafruit_BME280::FILTER_OFF   );
+
   setupWifi();
   mqttClient.setServer(MQTT_SERVER, 1883);
 
+  Serial.print("Initializing SD card...");
+
+  // see if the card is present and can be initialized:
+  if (!SD.begin(chipSelect)) {
+    Serial.println("Card failed, or not present");
+    // don't do anything more:
+    return;
+  }
+  Serial.println("card initialized.");
+
+
+
   //display.setTextAlignment(TEXT_ALIGN_CENTER);
+
 }
 
 void loop() {
@@ -82,7 +141,10 @@ void loop() {
 
   long now = millis();
   if (now - lastMsgTime > MQTT_PUBLISH_DELAY) {
-    lastMsgTime = now;
+    lastMsgTime = now;   //declare a string as an array of chars
+
+    File file6 = SD.open("bme680.txt", FILE_WRITE);
+
 
     // Reading BME280 sensor data
     // bme.takeForcedMeasurement(); // has no effect in normal mode
@@ -96,13 +158,32 @@ void loop() {
     }
     */
 
+
+    bme2.takeForcedMeasurement(); // has no effect in normal mode
+    humidity2 = bme2.readHumidity();
+    pressure2 = bme2.readPressure();
+    temperature2 = bme2.readTemperature();
+
+
     // Publishing sensor data
     mqttPublish(MQTT_TOPIC_TEMPERATURE, temperature);
     mqttPublish(MQTT_TOPIC_PRESSURE, pressure);
     mqttPublish(MQTT_TOPIC_HUMIDITY, humidity);
     mqttPublish(MQTT_TOPIC_VOC, voc);
 
-    disp = String("TEMP  " + (String)temperature + " °C \n" + "RH     " + (String)humidity + "% \n" + "PRES  " + (String)pressure + " Pa \n" + "VOC   " + (String)voc + " Ω \n");
+
+    mqttPublish(MQTT_TOPIC_TEMPERATURE2, temperature2);
+    mqttPublish(MQTT_TOPIC_PRESSURE2, pressure2);
+    mqttPublish(MQTT_TOPIC_HUMIDITY2, humidity2);
+
+    ts = ntpClient.getUnixTime();
+
+    str = String(ts);
+    Serial.println(str);
+    disp = String((String)str + "\n" + "TEMP  " + (String)temperature + (String)temperature2 + " °C \n" + "RH    " + (String)humidity + (String)humidity2 + "% \n" + "PRES  " + (String)pressure + " Pa \n" + "VOC  " + (String)voc + " Ω \n");
+    fstr = String((String) ts + ";" + (String)temperature + ";" + (String)humidity + ";" + (String)pressure + ";" + (String)voc + ";");
+    file6.println(fstr);
+    file6.close();
     //sprintf(disp, "TEMP %f", temperature);
     display.resetDisplay();
     display.drawString(0, 0, disp);
